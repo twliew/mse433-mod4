@@ -1,136 +1,162 @@
-# medical_cnn_multitask.py
-"""
-Multi-output CNN for medical procedure analysis using pre-trained ResNet
-Outputs:
-1. Repositioning time (regression)
-2. Idle time (regression)
-3. Phase transition delay (regression)
-4. Procedure phase (classification)
-5. Motion intensity (regression)
-"""
-
 import os
-from pathlib import Path
-from PIL import Image
+import cv2
 import torch
-import torch.nn as nn
-import torchvision.transforms as transforms
-import torchvision.models as models
-from torch.utils.data import Dataset, DataLoader
+import numpy as np
+from ultralytics import YOLO
+from torchvision import transforms
+from PIL import Image
 
-# =========================
-# Dataset
-# =========================
-class MedicalImageDataset(Dataset):
-    def __init__(self, root_dir, labels_dict, transform=None):
-        """
-        Args:
-            root_dir: folder with images
-            labels_dict: dict {image_path: {'reposition_time': float,
-                                           'idle_time': float,
-                                           'phase_delay': float,
-                                           'phase': int,
-                                           'motion_intensity': float}}
-            transform: torchvision transforms
-        """
-        self.root_dir = Path(root_dir)
-        self.transform = transform
-        self.samples = list(labels_dict.items())
-        self.labels_dict = labels_dict
+# -------------------------------
+# LOAD MODELS
+# -------------------------------
 
-    def __len__(self):
-        return len(self.samples)
+# YOLO (object detection)
+yolo_model = YOLO("yolov8n.pt")  # lightweight, replace with custom if needed
 
-    def __getitem__(self, idx):
-        img_path, labels = self.samples[idx]
-        img = Image.open(img_path).convert("RGB")
-        if self.transform:
-            img = self.transform(img)
+# V-JEPA 2 (approximate via pretrained ViT backbone)
+# NOTE: Official V-JEPA 2 isn't plug-and-play yet, so we simulate using ViT features
+from transformers import ViTModel, ViTImageProcessor
 
-        # Regression outputs
-        reposition_time = torch.tensor(labels['reposition_time'], dtype=torch.float32)
-        idle_time = torch.tensor(labels['idle_time'], dtype=torch.float32)
-        phase_delay = torch.tensor(labels['phase_delay'], dtype=torch.float32)
-        motion_intensity = torch.tensor(labels['motion_intensity'], dtype=torch.float32)
-        # Classification output
-        phase = torch.tensor(labels['phase'], dtype=torch.long)
+processor = ViTImageProcessor.from_pretrained("google/vit-base-patch16-224")
+vjepa_model = ViTModel.from_pretrained("google/vit-base-patch16-224")
 
-        return img, (reposition_time, idle_time, phase_delay, motion_intensity, phase)
+# -------------------------------
+# CONFIG
+# -------------------------------
 
-# =========================
-# Transforms
-# =========================
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    ),
-])
+IMAGE_FOLDER = "ep_lab_images"
+MOTION_THRESHOLD = 2.0  # tune this
+IDLE_THRESHOLD = 3      # number of frames
 
-# =========================
-# Multi-output model
-# =========================
-class MultiOutputResNet(nn.Module):
-    def __init__(self, num_phases=4):
-        super().__init__()
-        resnet = models.resnet50(pretrained=True)
-        # Remove last FC
-        self.features = nn.Sequential(*list(resnet.children())[:-1])
-        self.flatten = nn.Flatten()
-        self.fc = nn.Sequential(
-            nn.Linear(2048, 512),
-            nn.ReLU(),
-            nn.Dropout(0.3)
-        )
-        # Output heads
-        self.reposition_head = nn.Linear(512, 1)
-        self.idle_head = nn.Linear(512, 1)
-        self.phase_delay_head = nn.Linear(512, 1)
-        self.motion_head = nn.Linear(512, 1)
-        self.phase_head = nn.Linear(512, num_phases)
+# -------------------------------
+# HELPER FUNCTIONS
+# -------------------------------
 
-    def forward(self, x):
-        x = self.features(x)
-        x = self.flatten(x)
-        x = self.fc(x)
-        reposition_time = self.reposition_head(x)
-        idle_time = self.idle_head(x)
-        phase_delay = self.phase_delay_head(x)
-        motion_intensity = self.motion_head(x)
-        phase_logits = self.phase_head(x)
-        return reposition_time, idle_time, phase_delay, motion_intensity, phase_logits
+def detect_objects(image):
+    """YOLO detection"""
+    results = yolo_model(image)
+    
+    detections = []
+    for r in results:
+        for box in r.boxes:
+            cls = int(box.cls)
+            label = yolo_model.names[cls]
+            detections.append(label)
+    
+    return detections
 
-# =========================
-# Example usage
-# =========================
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = MultiOutputResNet().to(device)
-model.eval()
 
-# Dummy labels dictionary for demonstration
-labels_dict = {
-    "dataset/patient_001/frame_0001.png": {
-        "reposition_time": 1.2,
-        "idle_time": 0.5,
-        "phase_delay": 0.3,
-        "phase": 2,  # 0: Prep, 1: Mapping, 2: Ablation, 3: Closure
-        "motion_intensity": 0.8
-    }
-}
+def compute_optical_flow(prev_img, curr_img):
+    """Motion estimation using Farneback optical flow"""
+    prev_gray = cv2.cvtColor(prev_img, cv2.COLOR_BGR2GRAY)
+    curr_gray = cv2.cvtColor(curr_img, cv2.COLOR_BGR2GRAY)
 
-dataset = MedicalImageDataset("dataset", labels_dict, transform=transform)
-dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
+    flow = cv2.calcOpticalFlowFarneback(
+        prev_gray, curr_gray,
+        None,
+        0.5, 3, 15, 3, 5, 1.2, 0
+    )
 
-# Forward pass example
-with torch.no_grad():
-    for images, labels in dataloader:
-        images = images.to(device)
-        outputs = model(images)
-        print("Outputs:")
-        print(f"Repositioning time: {outputs[0].item():.2f}")
-        print(f"Idle time: {outputs[1].item():.2f}")
-        print(f"Phase transition delay: {outputs[2].item():.2f}")
-        print(f"Motion intensity: {outputs[3].item():.2f}")
-        print(f"Procedure phase logits: {outputs[4]}")
+    magnitude, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+    return np.mean(magnitude)
+
+
+def classify_phase(image):
+    """V-JEPA-style phase classification using embeddings"""
+    pil_img = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+
+    inputs = processor(images=pil_img, return_tensors="pt")
+    outputs = vjepa_model(**inputs)
+
+    embedding = outputs.last_hidden_state.mean(dim=1)
+
+    # Simple rule-based mapping (replace with trained classifier)
+    value = embedding.detach().numpy().mean()
+
+    if value < 0.2:
+        return "Prep"
+    elif value < 0.4:
+        return "Mapping"
+    elif value < 0.6:
+        return "Ablation"
+    else:
+        return "Closure"
+
+
+# -------------------------------
+# MAIN PIPELINE
+# -------------------------------
+
+def process_images(folder_path):
+    image_files = sorted(os.listdir(folder_path))
+
+    prev_img = None
+    idle_counter = 0
+    last_phase = None
+
+    results = []
+
+    for i, file in enumerate(image_files):
+        path = os.path.join(folder_path, file)
+        image = cv2.imread(path)
+
+        # -----------------------
+        # YOLO: Object Detection
+        # -----------------------
+        detections = detect_objects(image)
+
+        # -----------------------
+        # OpenCV: Motion
+        # -----------------------
+        motion = 0
+        if prev_img is not None:
+            motion = compute_optical_flow(prev_img, image)
+
+        # Motion intensity
+        motion_intensity = motion
+
+        # Idle detection
+        if motion < MOTION_THRESHOLD:
+            idle_counter += 1
+        else:
+            idle_counter = 0
+
+        idle = idle_counter >= IDLE_THRESHOLD
+
+        # -----------------------
+        # V-JEPA: Phase Detection
+        # -----------------------
+        phase = classify_phase(image)
+
+        # Phase transition delay
+        phase_transition = False
+        if last_phase is not None and phase != last_phase:
+            phase_transition = True
+
+        # -----------------------
+        # STORE RESULTS
+        # -----------------------
+        results.append({
+            "frame": file,
+            "detections": detections,
+            "motion_intensity": float(motion_intensity),
+            "idle": idle,
+            "phase": phase,
+            "phase_transition": phase_transition
+        })
+
+        prev_img = image
+        last_phase = phase
+
+    return results
+
+
+# -------------------------------
+# RUN
+# -------------------------------
+
+if __name__ == "__main__":
+    results = process_images(IMAGE_FOLDER)
+
+    for r in results:
+        print(r)
