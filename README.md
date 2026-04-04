@@ -49,7 +49,7 @@ python "Image Processing/Image_CNN.py"
 Run the image pipeline from the repository root:
 
 ```bash
-python "Image Processing/Image_CNN.py"
+python "Audio Processing/Audio_CNN.py"
 ```
 
 The script will:
