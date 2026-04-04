@@ -1,6 +1,4 @@
-# mse433-mod4
-
-## EP Lab Image and Audio Processing Pipeline
+# EP Lab Image and Audio Processing Pipeline
 
 This repository contains an image-processing pipeline implemented in `Image Processing/Image_CNN.py`.
 
