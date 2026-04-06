@@ -50,7 +50,7 @@ Run the audio pipeline from the repository root:
 python "Audio Processing/Audio_CNN.py"
 ```
 
-Run the Figma front end from the `Figma` folder:
+Run the Dashboard front end from the `Figma` folder:
 
 ```bash
 cd "Figma"
