@@ -44,11 +44,31 @@ Run the image pipeline from the repository root:
 python "Image Processing/Image_CNN.py"
 ```
 
-Run the image pipeline from the repository root:
+Run the audio pipeline from the repository root:
 
 ```bash
 python "Audio Processing/Audio_CNN.py"
 ```
+
+Run the dashboard front end from the `Dashboard` folder:
+
+```bash
+cd "Dashboard"
+npm install
+npx vite
+```
+
+Then open the URL shown by Vite, typically `http://localhost:5173/`.
+
+Run the Figma front end from the `Figma` folder:
+
+```bash
+cd "Figma"
+npm install
+npx vite
+```
+
+Then open the URL shown by Vite, typically `http://localhost:5174/` if port `5173` is in use.
 
 The script will:
 
