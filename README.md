@@ -18,7 +18,7 @@ Image Processing/
   ep_lab_images/
   yolov8n.pt
 Audio Processing/
-  Audio.py
+  Audio_CNN.py
 README.md
 ```
 
